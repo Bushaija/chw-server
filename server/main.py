@@ -1,12 +1,11 @@
 import uuid
-import bcrypt
 import sqlmodel as sql
-from fastapi import FastAPI, Request, Response, Depends, HTTPException, status, Cookie
+from fastapi import FastAPI, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import EmailStr
 
 from .database import get_session
-from .models import Admin, AdminCreate, HealthcareAdvisor, Stock
+from .models import Admin, AdminCreate, HealthcareAdvisor, Stock, LoginSchema
+from .utils import sessions, login_admin, get_session_id, get_current_admin, hash_password, verify_password
 
 
 # instance
@@ -24,40 +23,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-sessions = {}
-
-def login_admin(session_id: str, admin_id: int):
-    sessions[session_id] = admin_id
-
-def logout_admin(session_id: str):
-    sessions.pop(session_id, None)
-
-def get_current_admin(request: Request, session: sql.Session = Depends(get_session)) -> Admin:
-    session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in sessions:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    admin_id = sessions[session_id]
-    current_admin = session.get(Admin, admin_id)
-    if not current_admin:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Admin not found",
-        )
-    return current_admin
-
-
-def hash_password(plain_password: str) -> str:
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(plain_password.encode('utf-8'), salt)
-    return hashed_password.decode('utf-8')
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
-
-
 
 # root route
 @app.get("/")
@@ -73,11 +38,6 @@ def register_Admin(*, session: sql.Session = Depends(get_session), admin: AdminC
             status_code=status.HTTP_409_CONFLICT,
             detail="Admin with this email is already registered."
         )
-    # admin.password_hashed = hash_password(admin.password_hashed)
-    # db_admin = Admin.model_validate(admin)
-    # session.add(db_admin)
-    # session.commit()
-    # session.refresh(db_admin)
 
     admin.first_name = admin.first_name.lower()
     admin.last_name = admin.last_name.lower()
@@ -110,9 +70,14 @@ def register_Admin(*, session: sql.Session = Depends(get_session), admin: AdminC
         "data": db_admin
     }
 
+
+
 # admin login
 @app.post("/api/auth/login")
-def login(*, session: sql.Session = Depends(get_session), email: EmailStr, password: str, response: Response):
+def login(*, session: sql.Session = Depends(get_session), login_data: LoginSchema, response: Response):
+    email = login_data.email
+    password = login_data.password
+
     admin = session.exec(sql.select(Admin).where(Admin.email == email)).first()
     if not admin or not verify_password(password, admin.password_hashed):
         raise HTTPException(
@@ -121,36 +86,29 @@ def login(*, session: sql.Session = Depends(get_session), email: EmailStr, passw
         )
     session_id = str(uuid.uuid4())
     login_admin(session_id, admin.id)
-    response.set_cookie(key="session_id", value=session_id)
+    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="Lax")
     return {"message": "Login successful", "admin_id": admin.id, "session_id": session_id}
 
 
 # filter healthcare advisors and stock levels based on admin's region
 @app.get("/api/dashboard")
-def get_admin_dashboard(*, session_id: str = Cookie(None), session: sql.Session = Depends(get_session), admin: Admin = Depends(get_current_admin)):
-    if session_id is None:
-        session_id = request.cookies.get("session_id")
-        
+def get_admin_dashboard(
+    *,
+    session_id: str = Depends(get_session_id),  
+    session: sql.Session = Depends(get_session),
+    admin: Admin = Depends(get_current_admin)
+):
     if session_id is None or session_id not in sessions:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-
+    # print("dash-session_id: ", session_id)
     statement = sql.select(HealthcareAdvisor).where(HealthcareAdvisor.admin_id == admin.id)
     advisors = session.exec(statement).all()
-    stock_levels = []
-    for advisor in advisors:   
-      statement = sql.select(Stock).where(Stock.healthcare_advisor_id == advisor.id)
-      stocks = session.exec(statement).all()
-    stock_levels.extend(stocks)
 
-    # version 0.1.0
-    # statement = (
-    #     sql.select(Stock, HealthcareAdvisor)
-    #     .join(HealthcareAdvisor, Stock.healthcare_advisor_id == HealthcareAdvisor.id)
-    #     .where(HealthcareAdvisor.admin_id == admin.id)
-    # )
-    # results = session.exec(statement).all()
-    # advisors = [result[1] for result in results]
-    # stock_levels = [result[0] for result in results]
+    stock_levels = []
+    for advisor in advisors:
+        statement = sql.select(Stock).where(Stock.healthcare_advisor_id == advisor.id)
+        stocks = session.exec(statement).all()
+        stock_levels.extend(stocks)
 
     if not advisors:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No healthcare advisors found.")
@@ -162,7 +120,5 @@ def get_admin_dashboard(*, session_id: str = Cookie(None), session: sql.Session 
         "advisors": advisors,
         "stock_levels": stock_levels
     }
-
-
-    
+ 
 

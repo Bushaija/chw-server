@@ -1,6 +1,13 @@
 from datetime import datetime
 from sqlmodel import SQLModel, Field, Relationship
-from pydantic import EmailStr
+from pydantic import EmailStr, BaseModel
+
+class LoginSchema(BaseModel):
+    email: EmailStr
+    password: str
+
+class Cookies(BaseModel):
+    session_id: str
 
 class AdminBase(SQLModel):
     first_name: str 
@@ -25,10 +32,13 @@ class Admin(AdminBase, table=True):
 class HealthcareAdvisor(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     full_name: str 
+    first_name: str
+    last_name: str
     province: str 
     district: str 
     sector: str 
     cell: str
+    # prediction: int
     admin_id: int | None = Field(default=None, foreign_key="admin.id")
     admin: Admin | None = Relationship(back_populates="healthcare_advisors")
     stocks: list["Stock"] = Relationship(back_populates="healthcare_advisor")
@@ -36,7 +46,10 @@ class HealthcareAdvisor(SQLModel, table=True):
 class Stock(SQLModel, table=True):
     id: int|None = Field(default=None, primary_key=True)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+    year: int 
+    month: int
     stock_item_code: str
+    item_category: str
     quantity: int
     status: str
     healthcare_advisor_id: int | None = Field(default = None, foreign_key="healthcareadvisor.id")
