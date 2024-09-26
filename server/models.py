@@ -38,7 +38,7 @@ class HealthcareAdvisor(SQLModel, table=True):
     district: str 
     sector: str 
     cell: str
-    # prediction: int
+    prediction: int | None = None
     admin_id: int | None = Field(default=None, foreign_key="admin.id")
     admin: Admin | None = Relationship(back_populates="healthcare_advisors")
     stocks: list["Stock"] = Relationship(back_populates="healthcare_advisor")

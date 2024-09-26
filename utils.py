@@ -1,14 +1,13 @@
 import pickle
 from datetime import datetime, timedelta
 import pandas as pd 
-import bcrypt
-from fastapi import Request, HTTPException, Depends, status
 from sqlmodel import Session, select
 
-from server.models import HealthcareAdvisor, Stock, Admin
-from server.database import engine, create_tables_db, get_session
+from server.models import HealthcareAdvisor, Stock
+from server.database import engine, create_tables_db
 
-df = pd.read_excel("./data/cleaned_dataset.xlsx")
+
+df = pd.read_excel("./data/data.xlsx")
 
 with open('model.pkl', 'rb') as f:
     model = pickle.load(f)
@@ -42,68 +41,8 @@ def populate_tables():
                 healthcare_advisor_id=healthcare_advisor.id
             )
             session.add(stock) 
-
-            # Precompute the prediction
-            input_features = pd.DataFrame([{
-                "first_name": healthcare_advisor.first_name,
-                "last_name": healthcare_advisor.last_name,
-                "province": healthcare_advisor.province,
-                "district": healthcare_advisor.district,
-                "sector": healthcare_advisor.sector,
-                "cell": healthcare_advisor.cell,
-                "stock_item_code": stock.stock_item_code,
-            }])
-
-            encoded_features = feature_encode(input_features)
-            encoded_df = pd.DataFrame([encoded_features])
-            print("enc df: ", encoded_df)
-            prediction = model.predict(encoded_df)
-
-            # Store the prediction with the HealthcareAdvisor
-            healthcare_advisor.prediction = round(prediction[0])
-            session.add(healthcare_advisor)
-
-
         session.commit()
 
-sessions = {}
-
-def login_admin(session_id: str, admin_id: int):
-    sessions[session_id] = admin_id
-
-# Create a new dependency to get the session ID from cookies
-def get_session_id(request: Request):
-    session_id = request.cookies.get("session_id")
-    if session_id is None or session_id not in sessions:
-        raise HTTPException(status_code=401, detail="Invalid session ID")
-    return session_id
-
-def logout_admin(session_id: str):
-    sessions.pop(session_id, None)
-
-def get_current_admin(request: Request, session: Session = Depends(get_session)) -> Admin:
-    session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in sessions:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    admin_id = sessions[session_id]
-    current_admin = session.get(Admin, admin_id)
-    if not current_admin:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Admin not found",
-        )
-    return current_admin
-
-def hash_password(plain_password: str) -> str:
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(plain_password.encode('utf-8'), salt)
-    return hashed_password.decode('utf-8')
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def feature_encode(test_df):
     # Load the Excel data
@@ -130,6 +69,7 @@ def feature_encode(test_df):
     cell_id = df_cell[df_cell['Cell'] == test_df.iloc[:1,:].values[0,5].title()]['Cell ID'].values
     full_name_id = df_name[(df_name['FirstName'] == test_df.iloc[:1,:].values[0,0].title()) & (df_name['LastName'] == test_df.iloc[:1,:].values[0,1].title())]['FullName ID'].values
     stock_item_code_id = df_stock_type[df_stock_type['StockItemCode'] == test_df.iloc[:1,:].values[0,6]]['StockItemCode ID'].values
+    print("encoded output: ", cell_id)
 
     # Return the IDs as a dictionary
     dict_id = {
@@ -144,6 +84,12 @@ def feature_encode(test_df):
     }
     id_list = list(dict_id.values())
     return dict_id
+
+def predict(model, row):
+    row_encoded = feature_encode(row)
+    row_encoded_df = pd.DataFrame([row_encoded])
+    row_prediction = model(row_encoded_df)
+    return round(row_prediction[0])
 
 if __name__ == "__main__":
     create_tables_db()

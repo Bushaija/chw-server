@@ -1,11 +1,12 @@
 import uuid
+import pandas as pd
 import sqlmodel as sql
 from fastapi import FastAPI, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import get_session
 from .models import Admin, AdminCreate, HealthcareAdvisor, Stock, LoginSchema
-from .utils import sessions, login_admin, get_session_id, get_current_admin, hash_password, verify_password
+from .utils import sessions, login_admin, get_session_id, get_current_admin, hash_password, verify_password, model, predict
 
 
 # instance
@@ -109,6 +110,21 @@ def get_admin_dashboard(
         statement = sql.select(Stock).where(Stock.healthcare_advisor_id == advisor.id)
         stocks = session.exec(statement).all()
         stock_levels.extend(stocks)
+
+    if advisor.prediction is None:
+        input_features = pd.DataFrame([{
+            "first_name": advisor.first_name,
+            "last_name": advisor.last_name,
+            "province": advisor.province,
+            "district": advisor.district,
+            "sector": advisor.sector,
+            "cell": advisor.cell,
+            "stock_item_code": stocks[0].stock_item_code if stocks else None,
+        }])
+        print("input data: ", input_features)
+        advisor.prediction = predict(model, input_features)
+        session.add(advisor)
+        session.commit()
 
     if not advisors:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No healthcare advisors found.")
